@@ -19,6 +19,7 @@
 
 from optparse import OptionParser
 from statmon_sync import updatedb
+from statmon_common import db_truncate
 import sys,os
 
 if __name__=='__main__':
@@ -36,6 +37,8 @@ if __name__=='__main__':
 		help="The base encoding of the monitored filesystem", metavar="FS_ENCODING")
 	parser.add_option("-v", "--verbose", action="store_true", dest="verbose", default=False,
 		help="Print debug information to screen")
+	parser.add_option("-t", "--truncate", action="store_true", dest="truncate", default=False,
+		help="Truncate the fileinfo database")
 	(options, args) = parser.parse_args()
 
 	if not os.path.exists("%s/.statmon" % os.environ['HOME']):
@@ -46,6 +49,10 @@ if __name__=='__main__':
 		sys.exit(1)
 	
 	paths = args[0]
+
+	if options.truncate:
+		print "TRUNCATING FILE STAT INFO"
+		db_truncate(options.db_file)
 
 	print "SYNCHRONIZING DB WITH MONITORED DIRECTORIES"
 	updatedb(paths,options.db_file,options.fs_encoding)
