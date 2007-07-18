@@ -16,79 +16,109 @@
 # Boston, MA 02110-1301, USA.
 
 import pysqlite2.dbapi2 as pysqlite
-import os,sys
-from statmon_common import md5_reduce,db_check,log_error
+import os,sys,md5
+from statmon_common import md5_reduce,db_check,log_error,try_decode
 
-def sync_db_remove_deleted_files(db_file,fs_encoding=None):
+def sync_db_remove_deleted_files(db_file):
 	con = pysqlite.connect(db_file)
 	
 	cur = con.cursor()
-	deletelist = []
+	file_deletelist = []
+	dir_deletelist = []
 
-	print "  Checking for deleted files ... ",
-	cur.execute('select path from fileinfo')
+	print "  Checking for deleted files and directories ... ",
+
+	# Check Files
+	cur.execute("""
+		select 
+			d.path,d.encoding as denc,d.md5sum as dir_md5sum,
+			f.name,f.encoding as fenc,f.md5sum as file_md5sum 
+		from file f,directory d 
+		where f.dir_md5sum=d.md5sum""")
 	res = cur.fetchmany(1000)
 	while res:
 		for row in res:
-			path = row[0]
-			if fs_encoding:
-				fs_path = path.encode(fs_encoding)
-			else:
-				fs_path = path
-			if not os.path.exists(fs_path):
-				deletelist += [{'path':row[0]}]
+			path = os.path.join(row[0].encode(row[1]),row[3].encode(row[4]))
+			if not os.path.exists(path):
+				file_deletelist += [{'dir_md5sum':row[2], 'md5sum': row[5]}]
 		res = cur.fetchmany(1000)
-	print "[done]"
+
+	# Check Directories	
+	cur.execute("select d.path,d.encoding,d.md5sum from directory d")
+	res = cur.fetchmany(1000)
+	while res:
+		for row in res:
+			if not os.path.exists(row[0].encode(row[1])):
+				dir_deletelist += [{'md5sum': row[2]}]
+		res = cur.fetchmany(1000)
 
 	del cur
+
+	print "[done]"
 	
-	delete_rows = len(deletelist)
+	delete_file_rows = len(file_deletelist)
+	if delete_file_rows:
+		print "   * Files: Deleting %d row(s)" % delete_file_rows
+		con.executemany("delete from file where dir_md5sum=:dir_md5sum and md5sum=:md5sum",file_deletelist)
 	
-	if delete_rows:
-		print "   * Deleting %d row(s)" % delete_rows
-		con.executemany("delete from fileinfo where path=:path",deletelist)
+		con.commit()
+		print
+	
+	delete_dir_rows = len(dir_deletelist)
+	
+	if delete_dir_rows:
+		print "   * Directories: Deleting %d row(s)" % delete_dir_rows
+		con.executemany("delete from directory where md5sum=:md5sum",dir_deletelist)
 	
 		con.commit()
 		print
 
 	con.close()
 	del con
-	return delete_rows
+	return delete_file_rows + delete_dir_rows
 
 
-def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encoding=None):
+def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encodings=[]):
 	con = pysqlite.connect(db_file)
 	
 	cur = con.cursor()
-	updatelist = []
+	file_updatelist = []
+	dir_updatelist = []
 	
 	def stat(args, dirname, names):
-		cur,updatelist,fs_encoding = args
+		cur,dirs,files,fs_encodings = args
 		# Create unicode string if fs_encoding is set
-		if fs_encoding:
-			db_dirname = dirname.decode(fs_encoding)
-		else:
-			db_dirname = dirname
+		
+		u_dirname,enc = try_decode(dirname,fs_encodings)
+		
+		stat = os.stat(dirname)
+		dir_md5sum = md5_reduce(dirname,stat)
+		args = {'md5sum': dir_md5sum}
+		cur.execute('select 1 from directory where md5sum=:md5sum',args)
+		if not cur.fetchone():
+			dirs += [{
+				'path': u_dirname,
+				'uid' : stat.st_uid,
+				'gid' : stat.st_gid,
+				'md5sum' : dir_md5sum,
+				'encoding' : enc}]
+		
 		for n in names:
 			try:
-				if fs_encoding:
-					db_name = n.decode(fs_encoding)
-				else:
-					db_name = n
-				db_path = os.path.join(db_dirname,db_name)
+				u_name,enc = try_decode(n,fs_encodings)
 				path = os.path.join(dirname,n)
 				stat = os.stat(path)
 				args = {'md5sum': md5_reduce(path,stat)}
-				cur.execute('select 1 from fileinfo where md5sum=:md5sum',args)
+				cur.execute('select 1 from file where md5sum=:md5sum',args)
 				if not cur.fetchone():
-					updatelist += [{
-						'path' : db_path,
-						'basename' : db_name,
-						'directory' : db_dirname,
+					files += [{
+						'dir_md5sum' : dir_md5sum,
+						'name' : u_name,
 						'uid' : stat.st_uid,
 						'gid' : stat.st_gid,
 						'size' : stat.st_size,
-						'md5sum' : args['md5sum']}]
+						'encoding': enc,
+						'md5sum' : args['md5sum']},]
 				
 			except Exception, e:
 				log_error(e)
@@ -98,23 +128,35 @@ def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encoding=Non
 	if verbose:
 		print "  Checking for new files and file alterations %s ... " % directory,
 	sys.stdout.flush()
-	os.path.walk(directory,stat,(cur,updatelist,fs_encoding))
+	os.path.walk(directory,stat,(cur,dir_updatelist,file_updatelist,fs_encodings))
 	if verbose:
 		print "[done]"
 	
 	del cur
 	
-	update_rows = len(updatelist)
+	update_rows = len(dir_updatelist)
 	if update_rows:
 		if verbose:
-			print "  Updating file stat information db:"
+			print "  Updating directory information db:"
 			print "   * Adding or updating %d row(s)" % update_rows
 			print
-		if update_rows:
-			con.executemany("""
-				insert or replace into fileinfo (
-					path,basename,directory,uid,gid,size,md5sum) values (
-					:path,:basename,:directory,:uid,:gid,:size,:md5sum)""", updatelist)
+		con.executemany("""
+			insert or replace into directory (
+				path,uid,gid,encoding,md5sum) values (
+				:path,:uid,:gid,:encoding,:md5sum)""", dir_updatelist)
+		
+		con.commit()
+
+	update_rows = len(file_updatelist)	
+	if update_rows:
+		if verbose:
+			print "  Updating file information db:"
+			print "   * Adding or updating %d row(s)" % update_rows
+			print
+		con.executemany("""
+			insert or replace into file (
+				dir_md5sum,name,uid,gid,size,encoding,md5sum) values (
+				:dir_md5sum,:name,:uid,:gid,:size,:encoding,:md5sum)""", file_updatelist)
 		
 		con.commit()
 
@@ -123,8 +165,8 @@ def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encoding=Non
 	return update_rows
 
 
-def updatedb(paths,db_file,fs_encoding=None):
+def updatedb(paths,db_file,fs_encodings=[]):
 	db_check(db_file)
-	sync_db_remove_deleted_files(db_file,fs_encoding=fs_encoding)
+	sync_db_remove_deleted_files(db_file)
 	for p in paths.split(':'):
-		sync_db_update_missing_files(db_file,p,True,fs_encoding=fs_encoding)
+		sync_db_update_missing_files(db_file,p,True,fs_encodings=fs_encodings)

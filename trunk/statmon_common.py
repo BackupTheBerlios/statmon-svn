@@ -22,12 +22,19 @@ import md5
 def db_check(db_file):
 	con = pysqlite.connect(db_file)
 	cur = con.cursor()
-	cur.execute('pragma table_info(fileinfo)')
+	cur.execute('pragma table_info(directory)')
 	res = cur.fetchone()
 	if not res or not len(cur.fetchone()):
-		con.execute("CREATE TABLE fileinfo (path text, basename text, directory text, uid integer, gid integer,size numeric, md5sum text)")
-		con.execute("CREATE UNIQUE INDEX idx_fileinfo_path on fileinfo(path)")
-		con.execute("CREATE INDEX idx_fileinfo_md5sum on fileinfo(md5sum)")
+		con.execute("CREATE TABLE directory (path text, uid integer, gid integer,encoding text,md5sum text)")
+		con.execute("CREATE UNIQUE INDEX idx_directory_dir_id on directory(md5sum)")
+		con.commit()
+		
+	cur.execute('pragma table_info(file)')
+	res = cur.fetchone()
+	if not res or not len(cur.fetchone()):
+		con.execute("CREATE TABLE file (dir_md5sum text, name text, uid integer, gid integer,size numeric, md5sum text,encoding text)")
+		con.execute("CREATE INDEX idx_file_dir_md5sum on file(dir_md5sum)")
+		con.execute("CREATE UNIQUE INDEX idx_file_md5sum on file(md5sum)")
 		con.commit()
 	del cur
 	con.close()
@@ -44,6 +51,23 @@ def log_error(error):
 	f = open('error.log','a')
 	f.write("%s\n" % error)
 	f.close()
+
+
+def try_decode(subject,encodings):
+	if len(encodings) == 0:
+		return subject,None
+	unicode_subject = None
+	for enc in encodings:
+		try:
+			unicode_subject = subject.decode(enc)
+			break
+		except:
+			pass
+	if unicode_subject == None:
+		log_error("Failed to decode string")
+		return None,None
+	
+	return unicode_subject, enc
 
 
 def md5_reduce(path,stat):

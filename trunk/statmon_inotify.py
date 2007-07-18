@@ -17,7 +17,7 @@
 
 import pysqlite2.dbapi2 as pysqlite
 import sys,os,threading,sys
-from statmon_common import md5_reduce,log_error
+from statmon_common import md5_reduce,log_error,try_decode
 from statmon_sync import sync_db_remove_deleted_files,sync_db_update_missing_files
 from pyinotify import WatchManager, Notifier, ThreadedNotifier, EventsCodes, ProcessEvent
 
@@ -32,10 +32,11 @@ mask |= EventsCodes.IN_IGNORED
 
 class FileStatEventHandler(ProcessEvent):
 	
-	def __init__(self,wm,db_file,flush_timeout=5,verbose=False):
+	def __init__(self,wm,db_file,flush_timeout=5,verbose=False,fs_encodings=[]):
 		self.wm = wm
 		self.db_file = db_file
 		self.verbose = verbose
+		self.fs_encodings = fs_encodings
 		self.updatebuffer = {}
 		self.eventcounter = 0
 		self.thread_lock = threading.Lock()
@@ -51,13 +52,14 @@ class FileStatEventHandler(ProcessEvent):
 		if self.thread_lock.acquire(0) == False:
 			return
 	
-		updatelist = []
+		file_updatelist = []
 		deletelist = []
 		rec_deletelist = []
 		
 		for k,v in self.updatebuffer.items():
 			del self.updatebuffer[k]
-			directory,basename = os.path.split(k)
+			directory,name = os.path.split(k)
+
 			if v=='u':
 				try:
 					stat = os.stat(k)
@@ -65,25 +67,32 @@ class FileStatEventHandler(ProcessEvent):
 					# File or directory does not exist
 					log_error(e)
 					continue
-				
-				updatelist += [{
-					'path' : k,
-					'basename' : basename,
-					'directory' : directory,
+				u_name,enc = try_encode(name,self.fs_encodings)
+				file_updatelist += [{
+					'dir_md5sum' : dir_md5sum,
+					'name' : u_name,
 					'uid' : stat.st_uid,
 					'gid' : stat.st_gid,
 					'size' : stat.st_size,
+					'encoding' : enc,
 					'md5sum' : md5_reduce(k,stat)}]
+				
 			elif v=='d':
-				deletelist += [{'path':k}]
+				try:
+					stat = os.stat(k)
+				except OSError, e:
+					# File or directory does not exist
+					log_error(e)
+					continue
+				deletelist += [{'md5sum':md5_reduce(k,stat)}]
 			elif v=='dr':
 				rec_deletelist += [{'path_plus': '%s/%%' % k,'path':k}]
 				
 		delete_rows = len(deletelist)
 		rec_delete_rows = len(rec_deletelist)
-		update_rows = len(updatelist)
+		update_rows = len(file_updatelist)
 		changes = 0
-		
+
 		if delete_rows or update_rows or rec_delete_rows:
 			# Connect to DB
 			print "Updating",
@@ -92,24 +101,25 @@ class FileStatEventHandler(ProcessEvent):
 			
 			if update_rows:
 				con.executemany("""
-					insert or replace into fileinfo (
-						path,basename,directory,uid,gid,size,md5sum) 
+					insert or replace into file (
+						dir_md5sum,name,uid,gid,size,encoding,md5sum) 
 					select
-						:path,:basename,:directory,:uid,:gid,:size,:md5sum
+						:dir_md5sum,:name,:uid,:gid,:size,:encoding,:md5sum
 					where not exists (
 						select 1
-						from fileinfo
+						from file
 						where md5sum=:md5sum)""", updatelist)
 				# Now get the real amount of affected rows
 				update_rows = con.total_changes
 				
 			if delete_rows:
-				con.executemany("delete from fileinfo where path=:path",deletelist)
+				con.executemany("delete from file where md5sum=:md5sum",deletelist)
 				# Now get the real amount of affected rows
 				delete_rows = con.total_changes - update_rows
 			
 			if rec_delete_rows:
-				con.executemany("delete from fileinfo where path like :path_plus or path=:path", rec_deletelist)
+				con.executemany("delete from directory where path like :path_plus or path=:path", rec_deletelist)
+				con.execute("delete from file f where not exists (select 1 from directory where md5sum=f.dir_md5sum)")
 				delete_rows = con.total_changes - update_rows
 	
 			con.commit()
@@ -214,10 +224,10 @@ class FileStatEventHandler(ProcessEvent):
 
 
 
-def get_threaded_notifier(paths,db_file,flush_interval,verbose):
+def get_threaded_notifier(paths,db_file,flush_interval,verbose,fs_encodings=[]):
 
 	wm = WatchManager()
-	eventhandler = FileStatEventHandler(wm,db_file,flush_interval,verbose)
+	eventhandler = FileStatEventHandler(wm,db_file,flush_interval,verbose,fs_encodings)
 	
 	notifier = ThreadedNotifier(wm, eventhandler)
 	notifier.start()
@@ -230,9 +240,9 @@ def get_threaded_notifier(paths,db_file,flush_interval,verbose):
 	
 	return eventhandler,notifier
 
-def get_notifier(paths,db_file,flush_interval,verbose):
+def get_notifier(paths,db_file,flush_interval,verbose,fs_encodings=[]):
 	wm = WatchManager()
-	handler = FileStatEventHandler(wm,db_file,flush_interval,verbose)
+	handler = FileStatEventHandler(wm,db_file,flush_interval,verbose,fs_encodings)
 	notifier = Notifier(wm, handler)
 	
 	for p in paths:
