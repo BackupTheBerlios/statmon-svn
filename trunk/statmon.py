@@ -55,7 +55,7 @@ if __name__=='__main__':
 		db_truncate(options.db_file)
 
 	print "SYNCHRONIZING DB WITH MONITORED DIRECTORIES"
-	updatedb(paths.split(':'),options.db_file,options.fs_encodings.split(','))
+	updatedb(paths.split(':'),options.db_file,options.fs_encodings.split(','),options.verbose)
 
 	flush_interval = 0
 	try:

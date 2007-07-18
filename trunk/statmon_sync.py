@@ -178,8 +178,8 @@ def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encodings=[]
 	return update_rows
 
 
-def updatedb(paths,db_file,fs_encodings=[]):
+def updatedb(paths,db_file,fs_encodings=[],verbose=False):
 	db_check(db_file)
 	sync_db_remove_deleted_files(db_file)
 	for p in paths:
-		sync_db_update_missing_files(db_file,p,True,fs_encodings=fs_encodings)
+		sync_db_update_missing_files(db_file,p,verbose,fs_encodings=fs_encodings)
