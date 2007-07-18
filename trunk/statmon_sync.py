@@ -19,14 +19,15 @@ import pysqlite2.dbapi2 as pysqlite
 import os,sys,md5
 from statmon_common import md5_reduce,db_check,log_error,try_decode
 
-def sync_db_remove_deleted_files(db_file):
+def sync_db_remove_deleted_files(db_file,verbose=False):
 	con = pysqlite.connect(db_file)
 	
 	cur = con.cursor()
 	file_deletelist = []
 	dir_deletelist = []
 
-	print "  Checking for deleted files and directories ... ",
+	if verbose:
+		print "  Checking for deleted files and directories ... ",
 
 	# Check Files
 	cur.execute("""
@@ -67,24 +68,29 @@ def sync_db_remove_deleted_files(db_file):
 
 	del cur
 
-	print "[done]"
+	if verbose:
+		print "[done]"
 	
 	delete_file_rows = len(file_deletelist)
 	if delete_file_rows:
-		print "   * Files: Deleting %d row(s)" % delete_file_rows
+		if verbose:
+			print "   * Files: Deleting %d row(s)" % delete_file_rows
 		con.executemany("delete from file where dir_md5sum=:dir_md5sum and md5sum=:md5sum",file_deletelist)
 	
 		con.commit()
-		print
+		if verbose:
+			print
 	
 	delete_dir_rows = len(dir_deletelist)
 	
 	if delete_dir_rows:
-		print "   * Directories: Deleting %d row(s)" % delete_dir_rows
+		if verbose:
+			print "   * Directories: Deleting %d row(s)" % delete_dir_rows
 		con.executemany("delete from directory where md5sum=:md5sum",dir_deletelist)
 	
 		con.commit()
-		print
+		if verbose:
+			print
 
 	con.close()
 	del con
@@ -180,6 +186,6 @@ def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encodings=[]
 
 def updatedb(paths,db_file,fs_encodings=[],verbose=False):
 	db_check(db_file)
-	sync_db_remove_deleted_files(db_file)
+	sync_db_remove_deleted_files(db_file,verbose)
 	for p in paths:
 		sync_db_update_missing_files(db_file,p,verbose,fs_encodings=fs_encodings)
