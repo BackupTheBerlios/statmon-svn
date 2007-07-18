@@ -33,8 +33,8 @@ if __name__=='__main__':
 		help="Path to an sqlite3 db-file to update [default: ~/.statmon/fileinfo.db]", metavar="DB_FILE")
 	parser.add_option("-i", "--flush-interval", dest="flush_interval",default=0,
 		help="Start inotifier and flush with this interval in seconds [default: 0 - (inotify off)]", metavar="FLUSH_INTERVAL")
-	parser.add_option("-e", "--fs-encoding", dest="fs_encoding",default=None,
-		help="The base encoding of the monitored filesystem", metavar="FS_ENCODING")
+	parser.add_option("-e", "--fs-encodings", dest="fs_encodings",default=None,
+		help="A prioritized list of encodings to try on the monitored paths", metavar="FS_ENCODINGS")
 	parser.add_option("-v", "--verbose", action="store_true", dest="verbose", default=False,
 		help="Print debug information to screen")
 	parser.add_option("-t", "--truncate", action="store_true", dest="truncate", default=False,
@@ -55,7 +55,7 @@ if __name__=='__main__':
 		db_truncate(options.db_file)
 
 	print "SYNCHRONIZING DB WITH MONITORED DIRECTORIES"
-	updatedb(paths,options.db_file,options.fs_encoding)
+	updatedb(paths.split(':'),options.db_file,options.fs_encodings.split(','))
 
 	flush_interval = 0
 	try:

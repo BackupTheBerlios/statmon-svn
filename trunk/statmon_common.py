@@ -42,7 +42,8 @@ def db_check(db_file):
 
 def db_truncate(db_file):
 	con = pysqlite.connect(db_file)
-	con.execute("delete from fileinfo;")
+	con.execute("delete from file;")
+	con.execute("delete from directory;")
 	con.commit()
 	con.close()
 

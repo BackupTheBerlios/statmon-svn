@@ -38,7 +38,16 @@ def sync_db_remove_deleted_files(db_file):
 	res = cur.fetchmany(1000)
 	while res:
 		for row in res:
-			path = os.path.join(row[0].encode(row[1]),row[3].encode(row[4]))
+			if row[1]:
+				directory = row[0].encode(row[1])
+			else:
+				directory = row[0]
+			
+			if row[4]:
+				name = row[3].encode(row[4])
+			else:
+				name = row[3]
+			path = os.path.join(directory,name)
 			if not os.path.exists(path):
 				file_deletelist += [{'dir_md5sum':row[2], 'md5sum': row[5]}]
 		res = cur.fetchmany(1000)
@@ -48,7 +57,11 @@ def sync_db_remove_deleted_files(db_file):
 	res = cur.fetchmany(1000)
 	while res:
 		for row in res:
-			if not os.path.exists(row[0].encode(row[1])):
+			if row[1]:
+				directory = row[0].encode(row[1])
+			else:
+				directory = row[0]
+			if not os.path.exists(directory):
 				dir_deletelist += [{'md5sum': row[2]}]
 		res = cur.fetchmany(1000)
 
@@ -168,5 +181,5 @@ def sync_db_update_missing_files(db_file,directory,verbose=False,fs_encodings=[]
 def updatedb(paths,db_file,fs_encodings=[]):
 	db_check(db_file)
 	sync_db_remove_deleted_files(db_file)
-	for p in paths.split(':'):
+	for p in paths:
 		sync_db_update_missing_files(db_file,p,True,fs_encodings=fs_encodings)
