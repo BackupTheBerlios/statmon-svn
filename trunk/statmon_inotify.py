@@ -15,6 +15,12 @@
 # the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
 # Boston, MA 02110-1301, USA.
 
+# WARNING
+# =======
+# THIS MODULE IS CURRENTLY OUT OF ORDER DUE TO CHANGES IN THE DB DESIGN
+# WHEN FIXED - THIS COMMENT WILL DISAPPEAR
+
+
 import pysqlite2.dbapi2 as pysqlite
 import sys,os,threading,sys
 from statmon_common import md5_reduce,log_error,try_decode
@@ -37,7 +43,8 @@ class FileStatEventHandler(ProcessEvent):
 		self.db_file = db_file
 		self.verbose = verbose
 		self.fs_encodings = fs_encodings
-		self.updatebuffer = {}
+		self.file_updatebuffer = {}
+		self.dir_updatebuffer = {}
 		self.eventcounter = 0
 		self.thread_lock = threading.Lock()
 		self.flush_timeout = flush_timeout
@@ -48,16 +55,18 @@ class FileStatEventHandler(ProcessEvent):
 		
 	
 	def flush(self):
+		return 
 		global mask
 		if self.thread_lock.acquire(0) == False:
 			return
 	
 		file_updatelist = []
+		touched_dirs = []
 		deletelist = []
 		rec_deletelist = []
 		
-		for k,v in self.updatebuffer.items():
-			del self.updatebuffer[k]
+		for k,v in self.file_updatebuffer.items():
+			del self.file_updatebuffer[k]
 			directory,name = os.path.split(k)
 
 			if v=='u':
@@ -108,7 +117,7 @@ class FileStatEventHandler(ProcessEvent):
 					where not exists (
 						select 1
 						from file
-						where md5sum=:md5sum)""", updatelist)
+						where md5sum=:md5sum)""", file_updatelist)
 				# Now get the real amount of affected rows
 				update_rows = con.total_changes
 				
@@ -155,69 +164,88 @@ class FileStatEventHandler(ProcessEvent):
 			return
 		self.flush()
 
-	def register_change(self,action, dirname, names):
+	def register_file_change(self,action, dirname, names):
 		if type(names) == str:
 			names = [names]
 		for n in names:
-			self.updatebuffer[os.path.normpath(os.path.join(dirname,n))] = action
+			self.file_updatebuffer[os.path.normpath(os.path.join(dirname,n))] = action
 			self.eventcounter += 1
 			self.maybeFlush()
+		print "file_update: ",self.file_updatebuffer
 	
+	def register_dir_change(self,action, dirname):
+		self.dir_updatebuffer[os.path.normpath(dirname)] = action
+		self.eventcounter += 1
+		self.maybeFlush()
+		print "dir_update: ",self.dir_updatebuffer
 	
 	def process_IN_CREATE(self, event):
 		path = os.path.normpath(os.path.join(event.path,event.name))
-		if event.is_dir and self.wm.get_wd(path)==None:
-			self.new_dirs[path] = 1
 		if self.verbose:
 			print "CREATE: %s" % path
-		self.register_change('u',event.path,event.name)
+		if event.is_dir and self.wm.get_wd(path)==None:
+			self.new_dirs[path] = 1
+			self.register_dir_change('n',path)
+		self.register_file_change('u',event.path,event.name)
 
 	def process_IN_DELETE(self, event):
+		path = os.path.normpath(os.path.join(event.path,event.name))
 		if self.verbose:
 			print "DELETE: %s" % os.path.normpath(os.path.join(event.path,event.name))
-		self.register_change('d',event.path,event.name)
+		if event.is_dir:
+			self.register_dir_change('d',path)
+		self.register_file_change('d',event.path,event.name)
 	
 	def process_IN_CLOSE_WRITE(self, event):
+		path = os.path.normpath(os.path.join(event.path,event.name))
 		if self.verbose:
 			print "WRITE: %s" % os.path.normpath(os.path.join(event.path,event.name))
-		self.register_change('u',event.path,event.name)
+		if event.is_dir and self.wm.get_wd(path)!=None:
+			self.register_dir_change('u',path)
+		self.register_file_change('u',event.path,event.name)
 
 	def process_IN_ATTRIB(self, event):
+		path = os.path.normpath(os.path.join(event.path,event.name))
 		if self.verbose:
 			print "ATTRIB: %s" % os.path.normpath(os.path.join(event.path,event.name))
-		self.register_change('u',event.path,event.name)
+		if event.is_dir and self.wm.get_wd(path)!=None:
+			self.register_dir_change('u',path)
+		self.register_file_change('u',event.path,event.name)
 
 	def process_IN_MOVED_TO(self, event):
+		path = os.path.normpath(os.path.join(event.path,event.name))
 		if self.verbose:
 			print "MOVED_TO: %s" % os.path.normpath(os.path.join(event.path,event.name))
 		if event.is_dir:
 			# Register all subdirectories
-			os.path.walk(os.path.normpath(os.path.join(event.path,event.name)), self.register_change,'u')
+			os.register_dir_change('m',path)
+			os.path.walk(os.path.normpath(os.path.join(event.path,event.name)), self.register_file_change,'u')
 		# Register and the subject itself
-		self.register_change('u',event.path,event.name)
+		self.register_file_change('u',event.path,event.name)
 
 	def process_IN_MOVED_FROM(self, event):
+		path = os.path.normpath(os.path.join(event.path,event.name))
 		if self.verbose:
 			print "MOVED_FROM: %s" % os.path.normpath(os.path.join(event.path,event.name))
 		if event.is_dir:
 			# We only need to register the path and set the 'r'-recursive flag
-			self.register_change('dr',event.path,event.name)
+			self.register_dir_change('d',path)
 		else:
-			self.register_change('d',event.path,event.name)
+			self.register_file_change('d',event.path,event.name)
 
 	#def process_IN_MOVE_SELF(self, event):
 		#if self.verbose:
 			#print "MOVE_SELF: %s" % os.path.normpath(os.path.join(event.path,event.name))
 		#if event.is_dir:
 			## We only need to register the path and set the 'r'-recursive flag
-			#self.register_change('dr',event.path,event.name)
+			#self.register_file_change('dr',event.path,event.name)
 
 	#def process_IN_DELETE_SELF(self, event):
 		#if self.verbose:
 			#print "DELETE_SELF: %s" % os.path.normpath(os.path.join(event.path,event.name))
 		#if event.is_dir and event.wd==1:
 			## We only need to register the path and set the 'r'-recursive flag
-			#self.register_change('dr',event.path,event.name)
+			#self.register_file_change('dr',event.path,event.name)
 
 	def process_IN_IGNORED(self, event):
 		pass

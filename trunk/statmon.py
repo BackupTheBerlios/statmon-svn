@@ -54,8 +54,12 @@ if __name__=='__main__':
 		print "TRUNCATING FILE STAT INFO"
 		db_truncate(options.db_file)
 
+	if options.fs_encodings:
+		options.fs_encodings = options.fs_encodings.split(',')
+	else:
+		options.fs_encodings = []
 	print "SYNCHRONIZING DB WITH MONITORED DIRECTORIES"
-	updatedb(paths.split(':'),options.db_file,options.fs_encodings.split(','),options.verbose)
+	updatedb(paths.split(':'),options.db_file,options.fs_encodings,options.verbose)
 
 	flush_interval = 0
 	try:
